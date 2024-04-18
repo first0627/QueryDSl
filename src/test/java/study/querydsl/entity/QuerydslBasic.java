@@ -1,13 +1,22 @@
 package study.querydsl.entity;
 
+import static com.querydsl.jpa.JPAExpressions.select;
 import static org.assertj.core.api.Assertions.*;
 import static study.querydsl.entity.QMember.*;
 import static study.querydsl.entity.QTeam.team;
 
 import com.querydsl.core.QueryResults;
 import com.querydsl.core.Tuple;
+import com.querydsl.core.types.ExpressionUtils;
+import com.querydsl.core.types.Projections;
+import com.querydsl.core.types.dsl.CaseBuilder;
+import com.querydsl.core.types.dsl.Expressions;
+import com.querydsl.core.types.dsl.NumberExpression;
+import com.querydsl.jpa.JPAExpressions;
 import com.querydsl.jpa.impl.JPAQueryFactory;
 import jakarta.persistence.EntityManager;
+import jakarta.persistence.EntityManagerFactory;
+import jakarta.persistence.PersistenceUnit;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -15,6 +24,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.annotation.Commit;
 import org.springframework.transaction.annotation.Transactional;
+import study.querydsl.dto.MemberDto;
+import study.querydsl.dto.QMemberDto;
+import study.querydsl.dto.UserDto;
 
 @SpringBootTest
 @Transactional
@@ -22,6 +34,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class QuerydslBasic {
   @Autowired EntityManager em;
   JPAQueryFactory queryFactory;
+  @PersistenceUnit EntityManagerFactory emf;
 
   @BeforeEach
   public void before() {
@@ -248,6 +261,360 @@ public class QuerydslBasic {
 
     for (Tuple tuple : result) {
       System.out.println("tuple = " + tuple);
+    }
+  }
+
+  // 연관관계 없는 엔티티 외부 조인
+  // 회원의 이름이 팀 이름과 같은 대상 외부 조인
+  @Test
+  public void join_on_no_relation() throws Exception {
+    em.persist(new Member("teamA"));
+    em.persist(new Member("teamB"));
+    em.persist(new Member("teamC"));
+
+    List<Tuple> result =
+        queryFactory
+            .select(member, team)
+            .from(member)
+            .leftJoin(team)
+            .on(member.username.eq(team.name))
+            .fetch();
+
+    for (Tuple tuple : result) {
+      System.out.println("tuple = " + tuple);
+    }
+  }
+
+  @Test
+  public void fetchJoinNo() throws Exception {
+    em.flush();
+    em.clear();
+
+    Member findMember =
+        queryFactory.selectFrom(member).where(member.username.eq("member1")).fetchOne();
+
+    boolean loaded = emf.getPersistenceUnitUtil().isLoaded(findMember.getTeam());
+    assertThat(loaded).as("페치 조인 미적용").isFalse();
+  }
+
+  @Test
+  public void fetchJoinUse() throws Exception {
+    em.flush();
+    em.clear();
+
+    Member findMember =
+        queryFactory
+            .selectFrom(member)
+            .join(member.team, team)
+            .fetchJoin()
+            .where(member.username.eq("member1"))
+            .fetchOne();
+
+    boolean loaded = emf.getPersistenceUnitUtil().isLoaded(findMember.getTeam());
+    assertThat(loaded).as("페치 조인 적용").isTrue();
+  }
+
+  // 서브쿼리
+  // 나이가 가장 많은 회원 조회
+  @Test
+  public void subQuery() {
+    QMember memberSub = new QMember("memberSub");
+
+    List<Member> result =
+        queryFactory
+            .selectFrom(member)
+            .where(member.age.eq(select(memberSub.age.max()).from(memberSub)))
+            .fetch();
+    assertThat(result).extracting("age").containsExactly(40);
+  }
+
+  // 나이가 평균 이상인 회원
+  // 서브쿼리
+  // in절
+
+  // 나이가 평균 이상인 회원
+  // 서브쿼리
+  @Test
+  public void subQueryGoe() {
+    QMember memberSub = new QMember("memberSub");
+
+    List<Member> result =
+        queryFactory
+            .selectFrom(member)
+            .where(member.age.goe(select(memberSub.age.avg()).from(memberSub)))
+            .fetch();
+
+    assertThat(result).extracting("age").containsExactly(30, 40);
+  }
+
+  // select 절 서브쿼리
+
+  @Test
+  public void subQueryIn() {
+    QMember memberSub = new QMember("memberSub");
+
+    List<Member> result =
+        queryFactory
+            .selectFrom(member)
+            .where(member.age.in(select(memberSub.age).from(memberSub).where(memberSub.age.gt(10))))
+            .fetch();
+
+    assertThat(result).extracting("age").containsExactly(20, 30, 40);
+  }
+
+  @Test
+  public void selectSubQuery() {
+    QMember memberSub = new QMember("memberSub");
+
+    List<Tuple> result =
+        queryFactory
+            .select(member.username, select(memberSub.age.avg()).from(memberSub))
+            .from(member)
+            .fetch();
+
+    for (Tuple tuple : result) {
+      System.out.println("tuple = " + tuple);
+    }
+  }
+
+  // Case문
+  @Test
+  public void caseQuery() {
+    List<String> result =
+        queryFactory
+            .select(member.age.when(10).then("열살").when(20).then("스무살").otherwise("기타"))
+            .from(member)
+            .fetch();
+
+    for (String s : result) {
+      System.out.println("s = " + s);
+    }
+  }
+
+  // 복잡한 case문
+  // 단순한 조건이 아닌 복잡한 조건을 사용하고 싶다면 CaseBuilder를 사용하면 된다.
+  // CaseBuilder는 조건을 체인으로 이어서 작성할 수 있다.
+  // then()을 이어서 계속 사용할 수 있다.
+  // otherwise()는 필수이다.
+  // 이때, then()은 조건을 만족하면 반환할 값을 지정하고, otherwise()는 조건을 만족하지 않을 때 반환할 값을 지정한다.
+  // 예를 들어서 다음과 같은 임의의 순서로 회원을 출력하고시다면?
+  // 1. 0~20살이면 "최연소 회원"
+  // 2. 21~30살이면 "중간 연령 회원"
+  // 3. 그 외에는 "기타"
+  @Test
+  public void rankPath() throws Exception {
+
+    NumberExpression<Integer> rankPath =
+        new CaseBuilder()
+            .when(member.age.between(0, 20))
+            .then(2)
+            .when(member.age.between(21, 30))
+            .then(1)
+            .otherwise(3);
+
+    List<Tuple> result =
+        queryFactory
+            .select(member.username, member.age, rankPath)
+            .from(member)
+            .orderBy(rankPath.asc())
+            .fetch();
+
+    for (Tuple tuple : result) {
+      String username = tuple.get(member.username);
+      Integer age = tuple.get(member.age);
+      Integer rank = tuple.get(rankPath);
+      System.out.println("username = " + username + ", age = " + age + ", rank = " + rank);
+    }
+  }
+
+  // 상수
+  // 상수를 조회하고 싶다면 select()에 상수를 입력하면 된다.
+
+  @Test
+  public void constant() throws Exception {
+    List<Tuple> result =
+        queryFactory.select(member.username, Expressions.constant("A")).from(member).fetch();
+
+    for (Tuple tuple : result) {
+      System.out.println("tuple = " + tuple);
+    }
+  }
+
+  // 문자 더하기
+  // 문자 더하기는 concat()을 사용하면 된다.
+  @Test
+  public void concat() throws Exception {
+    List<String> result =
+        queryFactory
+            .select(member.username.concat("_").concat(member.age.stringValue()))
+            .from(member)
+            .fetch();
+
+    for (String s : result) {
+      System.out.println("s = " + s);
+    }
+  }
+
+  // 프로젝션
+  // 프로젝션은 select()에 원하는 대상을 입력하면 된다.
+  // 프로젝션 대상이 하나면 타입을 명확하게 지정할 수 있다.
+  @Test
+  public void simpleProjection() {
+    List<String> result = queryFactory.select(member.username).from(member).fetch();
+    for (String s : result) {
+      System.out.println("s = " + s);
+    }
+  }
+
+  // 프로젝션 대상이 둘 이상이면 튜플이나 DTO로 조회할 수 있다.
+  // 튜플은 Querydsl이 제공하는 Tuple 타입이다.
+  // Tuple은 querydsl-core 라이브러리에 있으므로 별도로 의존성을 추가해야 한다.
+  // Tuple은 querydsl-core의 Q 타입과 함께 사용해야 한다
+  // Tuple도 Querydsl에 종속적인것이라서 가급적이면 DTO로 조회하는 것을 권장한다.
+  @Test
+  public void tupleProjection() {
+    List<Tuple> result = queryFactory.select(member.username, member.age).from(member).fetch();
+    for (Tuple tuple : result) {
+      String username = tuple.get(member.username);
+      Integer age = tuple.get(member.age);
+      System.out.println("username = " + username);
+      System.out.println("age = " + age);
+    }
+  }
+
+  // DTO로 조회
+  // DTO로 조회하려면 프로젝션 대상이 되는 필드를 DTO의 생성자나 setter에 넣어주면 된다.
+  // DTO로 조회하려면 패키지와 클래스가 같아야 한다.
+  // DTO로 조회하려면 생성자가 필요하다.
+  // DTO로 조회하려면 필드의 이름이 같아야 한다.
+  // DTO로 조회하려면 순서가 같아야 한다.
+  // DTO로 조회하려면 타입이 같아야 한다.
+  // DTO로 조회하려면 조회 대상이 root 엔티티면 생성자 방식, 연관 엔티티면 setter 방식을 사용하면 된다.
+
+  @Test
+  public void findDtoByJPQL() {
+    List<MemberDto> result =
+        em.createQuery(
+                "select new study.querydsl.entity.MemberDto(m.username, m.age) from Member m",
+                MemberDto.class)
+            .getResultList();
+
+    for (MemberDto memberDto : result) {
+      System.out.println("memberDto = " + memberDto);
+    }
+  }
+
+  // 프로퍼티 접근
+  // 프로퍼티 접근은 getter, setter를 사용한다.
+  // 프로퍼티 접근은 getter, setter가 있어야 한다.
+  // 프로퍼티 접근은 이름이 같아야 한다.
+  @Test
+  public void findDtoBySetter() {
+    List<MemberDto> result =
+        queryFactory
+            .select(Projections.bean(MemberDto.class, member.username, member.age))
+            .from(member)
+            .fetch();
+
+    for (MemberDto memberDto : result) {
+      System.out.println("memberDto = " + memberDto);
+    }
+  }
+
+  // 필드 접근
+  // 필드 접근은 필드에 직접 접근한다.
+  // 필드 접근은 getter, setter가 없어도 된다.
+  @Test
+  public void findDtoByField() {
+    List<MemberDto> result =
+        queryFactory
+            .select(Projections.fields(MemberDto.class, member.username, member.age))
+            .from(member)
+            .fetch();
+
+    for (MemberDto memberDto : result) {
+      System.out.println("memberDto = " + memberDto);
+    }
+  }
+
+  // 생성자
+  // 생성자 방식은 생성자를 통해 값을 바로 넣어준다.
+  // 생성자 방식은 타입이 일치하는 필드만 넣어준다.
+  // 생성자 방식은 순서가 일치하는 필드만 넣어준다.
+  // 생성자 방식은 이름이 같아도 타입이 다르면 안된다.
+  @Test
+  public void findDtoByConstructor() {
+    List<MemberDto> result =
+        queryFactory
+            .select(Projections.constructor(MemberDto.class, member.username, member.age))
+            .from(member)
+            .fetch();
+
+    for (MemberDto memberDto : result) {
+      System.out.println("memberDto = " + memberDto);
+    }
+  }
+
+  // 필드의 이름이 다를 때
+  // 필드의 이름이 다르면 as를 사용하면 된다.
+  // 필드의 이름이 다르면 ExpressionUtils.as를 사용하면 된다.
+
+  @Test
+  public void findUserDto() {
+    QMember memberSub = new QMember("memberSub");
+    List<UserDto> result =
+        queryFactory
+            .select(
+                Projections.fields(
+                    UserDto.class,
+                    member.username.as("name"),
+                    ExpressionUtils.as(
+                        JPAExpressions.select(memberSub.age.max()).from(memberSub), "age")))
+            .from(member)
+            .fetch();
+
+    for (UserDto userDto : result) {
+      System.out.println("userDto = " + userDto);
+    }
+  }
+
+  //  생성자 방식으로 DTO 조회
+  // 생성자 방식으로 DTO를 조회할 때는 ExpressionUtils.as를 사용하면 된다.
+  // 여기서는 runtime에 오류가 발생한다.
+  @Test
+  public void findUserDtoByConstructor() {
+    QMember memberSub = new QMember("memberSub");
+    List<UserDto> result =
+        queryFactory
+            .select(
+                Projections.constructor(
+                    UserDto.class,
+                    member.username,
+                    ExpressionUtils.as(
+                        JPAExpressions.select(memberSub.age.max()).from(memberSub), "age")))
+            .from(member)
+            .fetch();
+
+    for (UserDto userDto : result) {
+      System.out.println("userDto = " + userDto);
+    }
+  }
+
+  // @QueryProjection
+  // @QueryProjection을 사용하면 컴파일 시점에 Q 타입을 생성할 수 있다.
+  // @QueryProjection을 사용하면 DTO에 Querydsl 관련 의존성을 제거할 수 있다.
+  // @QueryProjection을 사용하려면 DTO에 기본 생성자가 있어야 한다.
+  // @QueryProjection을 사용하려면 필드의 순서와 타입이 일치해야 한다.
+  // @QueryProjection을 사용하려면 필드의 이름이 일치해야 한다.
+  // 여기서는 compile타임에 에러를 발생시켜준다
+
+  @Test
+  public void findDtoByQueryProjection() {
+    List<MemberDto> result =
+        queryFactory.select(new QMemberDto(member.username, member.age)).from(member).fetch();
+
+    for (MemberDto memberDto : result) {
+      System.out.println("memberDto = " + memberDto);
     }
   }
 }
