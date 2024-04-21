@@ -7,7 +7,7 @@ plugins {
 
 group = 'study'
 version = '0.0.1-SNAPSHOT'
-sourceCompatibility = '17'
+sourceCompatibility = "21.PREVIEW"
 
 
 configurations {
@@ -53,3 +53,4 @@ tasks.named('test') {
 clean {
     delete file('src/main/generated')
 }
+targetCompatibility = JavaVersion.VERSION_21

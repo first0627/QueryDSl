@@ -661,9 +661,10 @@ public class QuerydslBasic {
   }
 
   private List<Member> searchMember2(String usernameCond, Integer ageCond) {
-    return queryFactory.selectFrom(member).where(usernameEq(usernameCond), ageEq(ageCond)).fetch();
+    return queryFactory.selectFrom(member).where(allEq(usernameCond, ageCond)).fetch();
   }
 
+  //
   private BooleanExpression usernameEq(String usernameCond) {
     return usernameCond != null ? member.username.eq(usernameCond) : null;
   }
@@ -677,5 +678,84 @@ public class QuerydslBasic {
 
   private BooleanExpression allEq(String usernameCond, Integer ageCond) {
     return usernameEq(usernameCond).and(ageEq(ageCond));
+  }
+
+  // 수정, 삭제 벌크 연산
+  // 벌크 연산은 영속성 컨텍스트를 무시하고 실행한다.
+  // 벌크 연산을 실행하고 나면 영속성 컨텍스트를 초기화 하는 것이 안전하다.
+
+  @Test
+  public void bulkUpdate() {
+
+    // member1 = 10 -> member1
+    // member2 = 20 -> member2
+    // member3 = 30 -> member3
+    // member4 = 40 -> member4
+
+    long count =
+        queryFactory.update(member).set(member.username, "비회원").where(member.age.lt(28)).execute();
+
+    // member1 = 10 -> 비회원
+    // member2 = 20 -> 비회원
+    // member3 = 30 -> member3
+    // member4 = 40 -> member4
+
+    // 벌크 연산을 실행하고 나면 영속성 컨텍스트를 초기화 하는 것이 안전하다.
+    // 스프링 Data JPA를 사용하면 벌크 연산을 실행하고 나면 영속성 컨텍스트를 초기화 한다.
+
+    em.flush();
+    em.clear();
+
+    List<Member> result = queryFactory.selectFrom(member).fetch();
+
+    for (Member member1 : result) {
+      System.out.println("member1 = " + member1);
+    }
+  }
+
+  // 벌크 더하기 연산
+  @Test
+  public void bulkAdd() {
+    long count = queryFactory.update(member).set(member.age, member.age.add(1)).execute();
+  }
+
+  // 벌크 삭제
+  @Test
+  public void bulkDelete() {
+    long count = queryFactory.delete(member).where(member.age.gt(18)).execute();
+  }
+
+  // SQL function 호출하기
+  // SQL function 호출은 JPA와 같이 Dialect에 등록된 SQL function을 호출할 수 있다.
+  // SQL function 호출은 Querydsl이 제공하는 Expressions를 사용하면 된다.
+  @Test
+  public void sqlFunction() {
+    List<String> result =
+        queryFactory
+            .select(
+                Expressions.stringTemplate(
+                    "function('replace', {0}, {1}, {2})", member.username, "member", "M"))
+            .from(member)
+            .fetch();
+
+    for (String s : result) {
+      System.out.println("s = " + s);
+    }
+  }
+
+  @Test
+  public void sqlFunction2() {
+    // lower
+
+    List<String> result =
+        queryFactory
+            .select(member.username)
+            .from(member)
+            .where(member.username.eq(member.username.lower()))
+            .fetch();
+
+    for (String s : result) {
+      System.out.println("s = " + s);
+    }
   }
 }
